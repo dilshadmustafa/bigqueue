@@ -24,7 +24,7 @@ public interface IBigQueue extends Closeable {
 	 * @param data to be enqueued data
 	 * @throws IOException exception throws if there is any IO error during enqueue operation.
 	 */
-	public void enqueue(byte[] data)  throws IOException;
+	public void enqueue(byte[] data)  throws Exception;
 	
 	/**
 	 * Retrieves and removes the front of a queue
@@ -32,14 +32,14 @@ public interface IBigQueue extends Closeable {
 	 * @return data at the front of a queue
 	 * @throws IOException exception throws if there is any IO error during dequeue operation.
 	 */
-	public byte[] dequeue() throws IOException;
+	public byte[] dequeue() throws Exception;
 	
 	/**
 	 * Removes all items of a queue, this will empty the queue and delete all back data files.
 	 * 
 	 * @throws IOException exception throws if there is any IO error during dequeue operation.
 	 */
-	public void removeAll() throws IOException;
+	public void removeAll() throws Exception;
 	
 	/**
 	 * Retrieves the item at the front of a queue
@@ -47,7 +47,7 @@ public interface IBigQueue extends Closeable {
 	 * @return data at the front of a queue
 	 * @throws IOException exception throws if there is any IO error during peek operation.
 	 */
-	public byte[] peek()  throws IOException;
+	public byte[] peek()  throws Exception;
 	
 	/**
 	 * Delete all used data files to free disk space.
@@ -58,7 +58,7 @@ public interface IBigQueue extends Closeable {
 	 * 
 	 * @throws IOException exception throws if there is any IO error during gc operation.
 	 */
-	public void gc() throws IOException;
+	public void gc() throws Exception;
 	
 	/**
 	 * Force to persist current state of the queue, 

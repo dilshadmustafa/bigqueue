@@ -6,7 +6,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,6 +31,51 @@ import org.apache.log4j.Logger;
  * @param <K> key
  * @param <V> value
  */
+
+/*
+ * This release of BigArray is a modification of the original BigArray version 0.7.0 by Leansoft Technology,
+ * https://github.com/bulldog2011/bigqueue, released under Apache License Version 2.0.
+
+ * This modified BigArray is also released under Apache License Version 2.0.
+
+ * BigArray modifications:-
+
+ * Dilshad Mustafa has modified the original BigArray and implemented the following functionality:-
+
+ * (1) All the page files are stored in a storage system accessed through the IStorageHandler.java interface.
+ * (2) Memory-mapped files are from a locally cached file in the local file system.
+ * (3) Multiple BigArray objects (refer constructor) with same arrayName should not be created with the 
+ *     same localDir (local directory path) as locally cached files should be kept separate.
+ * (4) Multiple BigArray objects (refer constructor) with same arrayName should not be created with the 
+ *     same storageDir (storage directory path) as this will result in overwriting of page files.
+ * 
+ * Page handling by this modified BigArray:-
+ * 
+ * (1) In BigArray, all Page files are written only once to the storage system to implement Write Once 
+ *     Read Many (WORM) design pattern.
+ * (2) This big array (the associated array folder) should not be modified after this BigArrayImpl object 
+ *     is closed [.close()] to keep the WORM design pattern.
+ * (3) Write Once Read Many (WORM) design pattern is built within the modified BigArray data structure itself 
+ *     and does not depend on IStorageHandler implementation. 
+ * (4) flushFiles() method can be used to flush the locally cached files (those modified), excluding the 
+ *     last page file, into the storage system. User can call flushFiles() to release memory if needed.    
+ * (5) New field m_unfilledPage in MappedPageFactoryImpl.java is used to keep track of the last page file 
+ *     to prevent it from getting removed from the cache. This way the last page file (whether it is unfilled 
+ *     / partially filled or fully filled) will be written, if modified [.append()], only once to the storage 
+ *     system at the time of closing the Big Array.   
+ * (6) If another BigArrayImpl object is created for this same array folder to do an append(), then the last 
+ *     page file (for data, index, meta_data) before the append() will be written again to the storage system 
+ *     if that page file is not fully filled. 
+ *
+ *     Because during append(), setDirty(true) is set on the last page file (for data, index, meta_data) if that 
+ *     page file is not fully filled. The last page file is referred to as unfilled page (m_unfilledPage in 
+ *     MappedPageFactoryImpl.java). 
+
+ *     So the big array (the associated array folder) should not be modified, either through same or another 
+ *     BigArrayImpl object, after it is created and closed [.close()] to keep the WORM design pattern.
+ *     
+ */
+
 public class LRUCacheImpl<K, V extends Closeable> implements ILRUCache<K, V> {
 	
 	private final static Logger logger = Logger.getLogger(LRUCacheImpl.class);
@@ -50,7 +97,23 @@ public class LRUCacheImpl<K, V extends Closeable> implements ILRUCache<K, V> {
 		ttlMap = new HashMap<K, TTLValue>();
 	}
 
-	public void put(K key, V value, long ttlInMilliSeconds) {
+	// New method
+	public LinkedList<K> getKeys() {
+		try {
+			readLock.lock();
+		    LinkedList<K> col = new LinkedList<K>();
+		    for(K k : map.keySet()) {
+		    	col.add(k);
+		    }
+		    return col;
+		} finally {
+			readLock.unlock();
+		}
+
+	}
+	
+	// Modified
+	public void put(K key, V value, long ttlInMilliSeconds, V valueToExclude) throws Exception {
 		Collection<V> valuesToClose = null;
 		try {
 			writeLock.lock();
@@ -59,6 +122,11 @@ public class LRUCacheImpl<K, V extends Closeable> implements ILRUCache<K, V> {
 			if (valuesToClose != null && valuesToClose.contains(value)) { // just be cautious
 				valuesToClose.remove(value);
 			}
+			
+			if (valuesToClose != null && valueToExclude != null && valuesToClose.contains(valueToExclude)) { // just be cautious
+				valuesToClose.remove(valueToExclude);
+			}
+			
 			map.put(key, value);
 			TTLValue ttl = new TTLValue(System.currentTimeMillis(), ttlInMilliSeconds);
 			ttl.refCount.incrementAndGet();
@@ -72,12 +140,17 @@ public class LRUCacheImpl<K, V extends Closeable> implements ILRUCache<K, V> {
 				logger.info("Mark&Sweep found " + size + (size > 1 ? " resources":" resource")  + " to close.");
 			}
 			// close resource asynchronously
-			executorService.execute(new ValueCloser<V>(valuesToClose));
+			// replaced with new code below executorService.execute(new ValueCloser<V>(valuesToClose));
+			// New code
+			ValueCloser<V> vc = new ValueCloser<V>(valuesToClose);
+			vc.doInThisThread();
+			// End New code
 		}
 	}
 
-	public void put(K key, V value) {
-		this.put(key, value, DEFAULT_TTL);
+	// Modified
+	public void put(K key, V value, V valueToExclude) throws Exception {
+		this.put(key, value, DEFAULT_TTL, valueToExclude);
 	}
 	
 	/**
@@ -143,6 +216,20 @@ public class LRUCacheImpl<K, V extends Closeable> implements ILRUCache<K, V> {
 			this.valuesToClose = valuesToClose;
 		}
 		
+		// New code
+		public void doInThisThread() throws Exception {
+			int size = valuesToClose.size();
+			for(V v : valuesToClose) {
+				if (v != null) {
+					v.close();
+				}
+			}
+			if (logger.isDebugEnabled()) {
+				logger.debug("doInThisThread() ResourceCloser closed " + size + (size > 1 ? " resources.":" resource."));
+			}
+		}
+		// End New code
+		
 		public void run() {
 			int size = valuesToClose.size();
 			for(V v : valuesToClose) {
@@ -206,6 +293,52 @@ public class LRUCacheImpl<K, V extends Closeable> implements ILRUCache<K, V> {
 		
 	}
 
+	// New method
+	@Override
+	public void removeExclude(V valueToExclude) throws Exception {
+		try {
+			writeLock.lock();
+			
+			Collection<V> valuesToClose = new HashSet<V>();
+			valuesToClose.addAll(map.values());
+			
+			if (valuesToClose != null && valuesToClose.size() > 0 && valueToExclude != null) {
+				if (valuesToClose.contains(valueToExclude)) {
+						valuesToClose.remove(valueToExclude);
+				}
+			}
+				
+			if (valuesToClose != null && valuesToClose.size() > 0) {
+				// close resource synchronously
+				for(V v : valuesToClose) {
+					v.close();
+				}
+			}
+			
+			Set<Entry<K, V>> entries = map.entrySet();
+			K keyForValueToExclude = null;
+			for (Entry<K, V> entry : entries) {
+				if (entry.getValue() == valueToExclude) {
+					keyForValueToExclude = entry.getKey();
+					break;
+				}
+			}
+			
+			if (keyForValueToExclude != null) {
+				map.clear();
+				map.put(keyForValueToExclude, valueToExclude);
+				
+				TTLValue ttlValueToExclude = ttlMap.get(keyForValueToExclude);
+				ttlMap.clear();
+				ttlMap.put(keyForValueToExclude, ttlValueToExclude);
+			}
+						
+		} finally {
+			writeLock.unlock();
+		}
+		
+	}
+	
 	@Override
 	public V remove(K key) throws IOException {
 		try {

@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import com.dilmus.dilshad.storage.IStorageHandler;
 import com.leansoft.bigqueue.page.IMappedPage;
 import com.leansoft.bigqueue.page.IMappedPageFactory;
 import com.leansoft.bigqueue.page.MappedPageFactoryImpl;
@@ -46,17 +47,21 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	
 	final ConcurrentMap<String, QueueFront> queueFrontMap = new ConcurrentHashMap<String, QueueFront>();
 
+	// New field
+	IStorageHandler m_storageHandler;
+	
 	/**
 	 * A big, fast and persistent queue implementation with fandout support.
 	 * 
 	 * @param queueDir  the directory to store queue data
 	 * @param queueName the name of the queue, will be appended as last part of the queue directory
 	 * @param pageSize the back data file size per page in bytes, see minimum allowed {@link BigArrayImpl#MINIMUM_DATA_PAGE_SIZE}
-	 * @throws IOException exception throws if there is any IO error during queue initialization
+	 * @throws Exception 
 	 */
-	public FanOutQueueImpl(String queueDir, String queueName, int pageSize)
-			throws IOException {
-		innerArray = new BigArrayImpl(queueDir, queueName, pageSize);
+	public FanOutQueueImpl(String queueDir, String queueName, int pageSize, IStorageHandler storageHandler)
+			throws Exception {
+		m_storageHandler = storageHandler;
+		innerArray = new BigArrayImpl(queueDir, queueName, pageSize, queueDir, m_storageHandler);
 	}
 
 	/**
@@ -65,16 +70,16 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	 * 
 	 * @param queueDir the directory to store queue data
 	 * @param queueName the name of the queue, will be appended as last part of the queue directory
-	 * @throws IOException exception throws if there is any IO error during queue initialization
+	 * @throws Exception 
 	 */
-	public FanOutQueueImpl(String queueDir, String queueName) throws IOException {
-		this(queueDir, queueName, BigArrayImpl.DEFAULT_DATA_PAGE_SIZE);
+	public FanOutQueueImpl(String queueDir, String queueName, IStorageHandler storageHandler) throws Exception {
+		this(queueDir, queueName, BigArrayImpl.DEFAULT_DATA_PAGE_SIZE, storageHandler);
 	}
 	
-	QueueFront getQueueFront(String fanoutId) throws IOException {
+	QueueFront getQueueFront(String fanoutId) throws Exception {
 		QueueFront qf = this.queueFrontMap.get(fanoutId);
 		if (qf == null) { // not in cache, need to create one
-			qf = new QueueFront(fanoutId);
+			qf = new QueueFront(fanoutId, m_storageHandler);
 			QueueFront found = this.queueFrontMap.putIfAbsent(fanoutId, qf);
 			if (found != null) {
 				qf.indexPageFactory.releaseCachedPages();
@@ -86,7 +91,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public boolean isEmpty(String fanoutId) throws IOException {
+	public boolean isEmpty(String fanoutId) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 			
@@ -104,12 +109,12 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public long enqueue(byte[] data) throws IOException {
+	public long enqueue(byte[] data) throws Exception {
 		return innerArray.append(data);
 	}
 
 	@Override
-	public byte[] dequeue(String fanoutId) throws IOException {
+	public byte[] dequeue(String fanoutId) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 		
@@ -144,7 +149,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public byte[] peek(String fanoutId) throws IOException {
+	public byte[] peek(String fanoutId) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 		
@@ -161,7 +166,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public int peekLength(String fanoutId) throws IOException {
+	public int peekLength(String fanoutId) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 		
@@ -177,7 +182,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 	
 	@Override
-	public long peekTimestamp(String fanoutId) throws IOException {
+	public long peekTimestamp(String fanoutId) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 			
@@ -194,22 +199,22 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	
 
 	@Override
-	public byte[] get(long index) throws IOException {
+	public byte[] get(long index) throws Exception {
 		return this.innerArray.get(index);
 	}
 
 	@Override
-	public int getLength(long index) throws IOException {
+	public int getLength(long index) throws Exception {
 		return this.innerArray.getItemLength(index);
 	}
 
 	@Override
-	public long getTimestamp(long index) throws IOException {
+	public long getTimestamp(long index) throws Exception {
 		return this.innerArray.getTimestamp(index);
 	}
 
 	@Override
-	public void removeBefore(long timestamp) throws IOException {
+	public void removeBefore(long timestamp) throws Exception {
 		try {
 			this.innerArray.arrayWriteLock.lock();
 			
@@ -228,7 +233,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public void limitBackFileSize(long sizeLimit) throws IOException {
+	public void limitBackFileSize(long sizeLimit) throws Exception {
 		try {
 			this.innerArray.arrayWriteLock.lock();
 			
@@ -254,7 +259,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public long findClosestIndex(long timestamp) throws IOException {
+	public long findClosestIndex(long timestamp) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 			
@@ -272,7 +277,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public void resetQueueFrontIndex(String fanoutId, long index) throws IOException {
+	public void resetQueueFrontIndex(String fanoutId, long index) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 		
@@ -298,7 +303,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public long size(String fanoutId) throws IOException {
+	public long size(String fanoutId) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 			
@@ -351,13 +356,16 @@ public class FanOutQueueImpl implements IFanOutQueue {
 			}
 			
 			innerArray.close();
+		} catch (Exception e) {
+			e.printStackTrace();
+			throw new RuntimeException(e);
 		} finally {
 			this.innerArray.arrayWriteLock.unlock();
 		}
 	}
 	
 	@Override
-	public void removeAll() throws IOException {
+	public void removeAll() throws Exception {
 		try {
 			this.innerArray.arrayWriteLock.lock();
 			
@@ -392,7 +400,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 		// lock for queue front write management
 		final Lock writeLock = new ReentrantLock();
 		
-		QueueFront(String fanoutId) throws IOException {
+		QueueFront(String fanoutId, IStorageHandler storageHandler) throws Exception {
 			try {
 				FolderNameValidator.validate(fanoutId);
 			} catch (IllegalArgumentException ex) {
@@ -402,7 +410,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 			// the ttl does not matter here since queue front index page is always cached
 			this.indexPageFactory = new MappedPageFactoryImpl(QUEUE_FRONT_INDEX_PAGE_SIZE, 
 					innerArray.arrayDirectory + QUEUE_FRONT_INDEX_PAGE_FOLDER_PREFIX + fanoutId, 
-					10 * 1000/*does not matter*/);
+					10 * 1000/*does not matter*/, innerArray.arrayDirectory + QUEUE_FRONT_INDEX_PAGE_FOLDER_PREFIX + fanoutId, innerArray.arrayDirectory, storageHandler);
 			
 			IMappedPage indexPage = this.indexPageFactory.acquirePage(QUEUE_FRONT_PAGE_INDEX);
 			
@@ -411,7 +419,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 			validateAndAdjustIndex();
 		}
 		
-		void validateAndAdjustIndex() throws IOException {
+		void validateAndAdjustIndex() throws Exception {
 			if (index.get() != innerArray.arrayHeadIndex.get()) { // ok that index is equal to array head index
 				try {
 					innerArray.validateIndex(index.get());
@@ -422,13 +430,13 @@ public class FanOutQueueImpl implements IFanOutQueue {
 		}
 		
 		// reset queue front index to the tail of array
-		void resetIndex() throws IOException {
+		void resetIndex() throws Exception {
 			index.set(innerArray.arrayTailIndex.get());
 			
 			this.persistIndex();
 		}
 		
-		void incrementIndex() throws IOException {
+		void incrementIndex() throws Exception {
 			long nextIndex = index.get();
 			if (nextIndex == Long.MAX_VALUE) {
 				nextIndex = 0L; // wrap
@@ -440,7 +448,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 			this.persistIndex();
 		}
 		
-		void persistIndex() throws IOException {
+		void persistIndex() throws Exception {
 			// persist index
 			IMappedPage indexPage = this.indexPageFactory.acquirePage(QUEUE_FRONT_PAGE_INDEX);
 			ByteBuffer indexBuffer = indexPage.getLocal(0);
@@ -460,7 +468,7 @@ public class FanOutQueueImpl implements IFanOutQueue {
 	}
 
 	@Override
-	public long getFrontIndex(String fanoutId) throws IOException {
+	public long getFrontIndex(String fanoutId) throws Exception {
 		try {
 			this.innerArray.arrayReadLock.lock();
 		

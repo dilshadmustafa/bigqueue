@@ -9,7 +9,14 @@ import java.io.IOException;
  * @author bulldog
  *
  */
-public interface IBigArray extends Closeable {
+public interface IBigArray /*extends Closeable*/ {
+	
+	// New method as Closeable interface is not extended (commented) for this interface
+	// Because Closeable's close() method throws IOException
+	public void close() throws Exception;
+	
+	// New method
+	public void flushFiles() throws Exception;
 	
 	public static final long NOT_FOUND = -1;
 	
@@ -20,7 +27,7 @@ public interface IBigArray extends Closeable {
 	 * @return appended index
 	 * @throws IOException if there is any IO error
 	 */
-	long append(byte[] data) throws IOException;
+	long append(byte[] data) throws Exception;
 	
 	
 	/**
@@ -30,7 +37,7 @@ public interface IBigArray extends Closeable {
 	 * @return binary data if the index is valid
 	 * @throws IOException if there is any IO error
 	 */
-	byte[] get(long index) throws IOException;
+	byte[] get(long index) throws Exception;
 	
 	/**
 	 * Get the timestamp of data at specific index,
@@ -41,7 +48,7 @@ public interface IBigArray extends Closeable {
 	 * @return timestamp when the data was appended
 	 * @throws IOException if there is any IO error
 	 */
-	long getTimestamp(long index) throws IOException;
+	long getTimestamp(long index) throws Exception;
 
 	/**
 	 * The total number of items has been appended into the array
@@ -97,7 +104,7 @@ public interface IBigArray extends Closeable {
 	 * Remove all data in this array, this will empty the array and delete all back page files.
 	 * 
 	 */
-	void removeAll() throws IOException;
+	void removeAll() throws Exception;
 	
 	/**
 	 * Remove all data before specific index, this will advance the array tail to index and 
@@ -106,7 +113,7 @@ public interface IBigArray extends Closeable {
 	 * @param index an index
 	 * @throws IOException exception thrown if there was any IO error during the removal operation
 	 */
-	void removeBeforeIndex(long index) throws IOException;
+	void removeBeforeIndex(long index) throws Exception;
 	
 	/**
 	 * Remove all data before specific timestamp, this will advance the array tail and delete back page files
@@ -115,7 +122,7 @@ public interface IBigArray extends Closeable {
 	 * @param timestamp a timestamp
 	 * @throws IOException exception thrown if there was any IO error during the removal operation
 	 */
-	void removeBefore(long timestamp) throws IOException;
+	void removeBefore(long timestamp) throws Exception;
 	
 	/**
 	 * Force to persist newly appended data,
@@ -135,7 +142,7 @@ public interface IBigArray extends Closeable {
 	 * @return an index
 	 * @throws IOException exception thrown if there was any IO error during the getClosestIndex operation
 	 */
-	long findClosestIndex(long timestamp) throws IOException;
+	long findClosestIndex(long timestamp) throws Exception;
 	
 	
 	/**
@@ -144,7 +151,7 @@ public interface IBigArray extends Closeable {
 	 * @return total size of back files
 	 * @throws IOException exception thrown if there was any IO error during the getBackFileSize operation
 	 */
-	long getBackFileSize() throws IOException;
+	long getBackFileSize() throws Exception;
 	
 	/**
 	 * limit the back file size, truncate back file and advance array tail index accordingly,
@@ -153,7 +160,7 @@ public interface IBigArray extends Closeable {
 	 * @param sizeLimit the size to limit
 	 * @throws IOException exception thrown if there was any IO error during the limitBackFileSize operation
 	 */
-	void limitBackFileSize(long sizeLimit) throws IOException;
+	void limitBackFileSize(long sizeLimit) throws Exception;
 	
 	
 	/**
@@ -163,5 +170,5 @@ public interface IBigArray extends Closeable {
 	 * @return the length of binary data if the index is valid
 	 * @throws IOException if there is any IO error
 	 */
-	int getItemLength(long index) throws IOException;
+	int getItemLength(long index) throws Exception;
 }

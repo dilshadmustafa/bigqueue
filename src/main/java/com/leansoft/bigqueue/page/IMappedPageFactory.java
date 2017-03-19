@@ -11,6 +11,12 @@ import java.util.Set;
  */
 public interface IMappedPageFactory {
 	
+	// New method
+	public void flushFilesAll() throws Exception;
+	
+	// New method
+	public void flushFilesExclude() throws Exception;
+	
 	/**
 	 * Acquire a mapped page with specific index from the factory
 	 * 
@@ -18,7 +24,11 @@ public interface IMappedPageFactory {
 	 * @return a mapped page
 	 * @throws IOException exception thrown if there was any IO error during the acquire operation
 	 */
-	IMappedPage acquirePage(long index) throws IOException;
+
+	IMappedPage acquirePage(long index) throws Exception;
+	
+	// New method
+	IMappedPage acquirePageCreateOrModifyPage(long index) throws Exception;
 	
 	/**
 	 * Return the mapped page to the factory,

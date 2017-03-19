@@ -3,6 +3,8 @@ package com.leansoft.bigqueue.cache;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.LinkedList;
+import java.util.Set;
 
 /**
  * LRU cache ADT
@@ -14,6 +16,8 @@ import java.util.Collection;
  */
 public interface ILRUCache<K, V extends Closeable> {
 	
+	public LinkedList<K> getKeys();
+	
 	/**
 	 * Put a keyed resource with specific ttl into the cache
 	 * 
@@ -23,7 +27,8 @@ public interface ILRUCache<K, V extends Closeable> {
 	 * @param value the to be cached resource
 	 * @param ttlInMilliSeconds time to live in milliseconds
 	 */
-	public void put(final K key, final V value, final long ttlInMilliSeconds);
+	// Modified
+	public void put(final K key, final V value, final long ttlInMilliSeconds, final V valueToExclude) throws Exception;
 	
 	/**
 	 * Put a keyed resource with default ttl into the cache
@@ -33,7 +38,8 @@ public interface ILRUCache<K, V extends Closeable> {
 	 * @param key the key of the cached resource
 	 * @param value the to be cached resource
 	 */
-	public void put(final K key, final V value);
+	// Modified
+	public void put(final K key, final V value, final V valueToExclude) throws Exception;
 	
 	
 	/**
@@ -70,6 +76,9 @@ public interface ILRUCache<K, V extends Closeable> {
 	 * @throws IOException exception thrown if there is any IO error
 	 */
 	public void removeAll() throws IOException;
+	
+	// New method
+	public void removeExclude(V valueToExclude) throws Exception;
 	
 	/**
 	 * The size of the cache, equals to current total number of cached resources.

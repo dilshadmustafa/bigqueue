@@ -1,5 +1,6 @@
 package com.leansoft.bigqueue.page;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
@@ -9,6 +10,9 @@ import java.nio.ByteBuffer;
  *
  */
 public interface IMappedPage {
+	
+	// New method
+	public boolean isDirty();
 	
 	/**
 	 * Get a thread local copy of the mapped page buffer

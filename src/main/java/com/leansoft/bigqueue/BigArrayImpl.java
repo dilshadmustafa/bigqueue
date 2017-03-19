@@ -4,12 +4,16 @@ import java.io.File;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import com.dilmus.dilshad.storage.IStorageHandler;
 import com.leansoft.bigqueue.page.IMappedPage;
 import com.leansoft.bigqueue.page.IMappedPageFactory;
 import com.leansoft.bigqueue.page.MappedPageFactoryImpl;
@@ -32,6 +36,51 @@ import com.leansoft.bigqueue.utils.FileUtil;
  * @author bulldog
  *
  */
+
+/*
+ * This release of BigArray is a modification of the original BigArray version 0.7.0 by Leansoft Technology,
+ * https://github.com/bulldog2011/bigqueue, released under Apache License Version 2.0.
+
+ * This modified BigArray is also released under Apache License Version 2.0.
+
+ * BigArray modifications:-
+
+ * Dilshad Mustafa has modified the original BigArray and implemented the following functionality:-
+
+ * (1) All the page files are stored in a storage system accessed through the IStorageHandler.java interface.
+ * (2) Memory-mapped files are from a locally cached file in the local file system.
+ * (3) Multiple BigArray objects (refer constructor) with same arrayName should not be created with the 
+ *     same localDir (local directory path) as locally cached files should be kept separate.
+ * (4) Multiple BigArray objects (refer constructor) with same arrayName should not be created with the 
+ *     same storageDir (storage directory path) as this will result in overwriting of page files.
+ * 
+ * Page handling by this modified BigArray:-
+ * 
+ * (1) In BigArray, all Page files are written only once to the storage system to implement Write Once 
+ *     Read Many (WORM) design pattern.
+ * (2) This big array (the associated array folder) should not be modified after this BigArrayImpl object 
+ *     is closed [.close()] to keep the WORM design pattern.
+ * (3) Write Once Read Many (WORM) design pattern is built within the modified BigArray data structure itself 
+ *     and does not depend on IStorageHandler implementation. 
+ * (4) flushFiles() method can be used to flush the locally cached files (those modified), excluding the 
+ *     last page file, into the storage system. User can call flushFiles() to release memory if needed.    
+ * (5) New field m_unfilledPage in MappedPageFactoryImpl.java is used to keep track of the last page file 
+ *     to prevent it from getting removed from the cache. This way the last page file (whether it is unfilled 
+ *     / partially filled or fully filled) will be written, if modified [.append()], only once to the storage 
+ *     system at the time of closing the Big Array.   
+ * (6) If another BigArrayImpl object is created for this same array folder to do an append(), then the last 
+ *     page file (for data, index, meta_data) before the append() will be written again to the storage system 
+ *     if that page file is not fully filled. 
+ *
+ *     Because during append(), setDirty(true) is set on the last page file (for data, index, meta_data) if that 
+ *     page file is not fully filled. The last page file is referred to as unfilled page (m_unfilledPage in 
+ *     MappedPageFactoryImpl.java). 
+
+ *     So the big array (the associated array folder) should not be modified, either through same or another 
+ *     BigArrayImpl object, after it is created and closed [.close()] to keep the WORM design pattern.
+ *     
+ */
+
 public class BigArrayImpl implements IBigArray {
 	
 	// folder name for index page
@@ -76,6 +125,9 @@ public class BigArrayImpl implements IBigArray {
 	
 	// directory to persist array data
 	String arrayDirectory;
+	// New field
+	String m_localArrayDirPath; // to persist cached array data
+	IStorageHandler m_storageHandler;
 	
 	// factory for index page management(acquire, release, cache)
 	IMappedPageFactory indexPageFactory; 
@@ -114,10 +166,10 @@ public class BigArrayImpl implements IBigArray {
 	 * 
 	 * @param arrayDir directory for array data store
 	 * @param arrayName the name of the array, will be appended as last part of the array directory
-	 * @throws IOException exception throws during array initialization
+	 * @throws Exception 
 	 */
-	public BigArrayImpl(String arrayDir, String arrayName) throws IOException {
-		this(arrayDir, arrayName, DEFAULT_DATA_PAGE_SIZE);
+	public BigArrayImpl(String arrayDir, String arrayName, String localDir, IStorageHandler storageHandler) throws Exception {
+		this(arrayDir, arrayName, DEFAULT_DATA_PAGE_SIZE, localDir, storageHandler);
 	}
 	
 	/**
@@ -126,9 +178,9 @@ public class BigArrayImpl implements IBigArray {
 	 * @param arrayDir directory for array data store
 	 * @param arrayName the name of the array, will be appended as last part of the array directory
 	 * @param pageSize the back data file size per page in bytes, see minimum allowed {@link #MINIMUM_DATA_PAGE_SIZE}.
-	 * @throws IOException exception throws during array initialization
+	 * @throws Exception 
 	 */
-	public BigArrayImpl(String arrayDir, String arrayName, int pageSize) throws IOException {
+	public BigArrayImpl(String arrayDir, String arrayName, int pageSize, String localDir, IStorageHandler storageHandler) throws Exception {
 		arrayDirectory = arrayDir;
 		if (!arrayDirectory.endsWith(File.separator)) {
 			arrayDirectory += File.separator;
@@ -140,6 +192,40 @@ public class BigArrayImpl implements IBigArray {
 		if (!FileUtil.isFilenameValid(arrayDirectory)) {
 			throw new IllegalArgumentException("invalid array directory : " + arrayDirectory);
 		}
+
+		// New code
+		m_localArrayDirPath = localDir;
+		if (!m_localArrayDirPath.endsWith(File.separator)) {
+			m_localArrayDirPath += File.separator;
+		}
+		// append array name as part of the directory
+		m_localArrayDirPath = m_localArrayDirPath + arrayName + File.separator;
+		
+		// validate directory
+		if (!FileUtil.isFilenameValid(m_localArrayDirPath)) {
+			throw new IllegalArgumentException("invalid local directory : " + m_localArrayDirPath);
+		}
+		// End new code
+		
+		// New code
+		File localArrayDirPathFileObj = new File(m_localArrayDirPath);
+		if (!localArrayDirPathFileObj.exists()) {
+			boolean status = localArrayDirPathFileObj.mkdir();
+			if (false == status)
+				throw new IOException("Failed to create local array dir : " + m_localArrayDirPath + " Check if local parent directories exist");
+		}
+		// End new code
+		
+		// Storage handler
+		m_storageHandler = storageHandler;
+		try {
+			m_storageHandler.mkdirIfAbsent(arrayDirectory);
+		} catch (Exception e) {
+			Path localPath = Paths.get(m_localArrayDirPath);
+			Files.deleteIfExists(localPath);
+			throw e;
+		}
+		// End Storage handler
 		
 		if (pageSize < MINIMUM_DATA_PAGE_SIZE) {
 			throw new IllegalArgumentException("invalid page size, allowed minimum is : " + MINIMUM_DATA_PAGE_SIZE + " bytes.");
@@ -150,23 +236,62 @@ public class BigArrayImpl implements IBigArray {
 		this.commonInit();
 	}
 	
+	// New method
+	private void flushFilesAll() throws Exception {
+		try {
+			arrayWriteLock.lock();
+			if (this.metaPageFactory != null) {
+				this.metaPageFactory.flushFilesAll();
+			}
+			if (this.indexPageFactory != null) {
+				this.indexPageFactory.flushFilesAll();
+			}
+			if (this.dataPageFactory != null) {
+				this.dataPageFactory.flushFilesAll();
+			}
+			Path path = Paths.get(m_localArrayDirPath);
+			Files.deleteIfExists(path);
+		} finally {
+			arrayWriteLock.unlock();
+		}
+	}
+	
+	// New method
+	// flushes all page files excluding last page file
+	public void flushFiles() throws Exception {
+		try {
+			arrayWriteLock.lock();
+			if (this.metaPageFactory != null) {
+				this.metaPageFactory.flushFilesExclude();
+			}
+			if (this.indexPageFactory != null) {
+				this.indexPageFactory.flushFilesExclude();
+			}
+			if (this.dataPageFactory != null) {
+				this.dataPageFactory.flushFilesExclude();
+			}
+		} finally {
+			arrayWriteLock.unlock();
+		}
+	}
+	
 	public String getArrayDirectory() {
 		return this.arrayDirectory;
 	}
 	
 	
-	void commonInit() throws IOException {
+	void commonInit() throws Exception {
 		// initialize page factories
 		this.indexPageFactory = new MappedPageFactoryImpl(INDEX_PAGE_SIZE, 
 				this.arrayDirectory + INDEX_PAGE_FOLDER, 
-				INDEX_PAGE_CACHE_TTL);
+				INDEX_PAGE_CACHE_TTL, m_localArrayDirPath + INDEX_PAGE_FOLDER, m_localArrayDirPath, m_storageHandler);
 		this.dataPageFactory = new MappedPageFactoryImpl(DATA_PAGE_SIZE, 
 				this.arrayDirectory + DATA_PAGE_FOLDER, 
-				DATA_PAGE_CACHE_TTL);
+				DATA_PAGE_CACHE_TTL, m_localArrayDirPath + DATA_PAGE_FOLDER, m_localArrayDirPath, m_storageHandler);
 		// the ttl does not matter here since meta data page is always cached
 		this.metaPageFactory = new MappedPageFactoryImpl(META_DATA_PAGE_SIZE, 
 				this.arrayDirectory + META_DATA_PAGE_FOLDER, 
-				10 * 1000/*does not matter*/);
+				10 * 1000/*does not matter*/, m_localArrayDirPath + META_DATA_PAGE_FOLDER, m_localArrayDirPath, m_storageHandler);
 		
 		// initialize array indexes
 		initArrayIndex();
@@ -175,8 +300,11 @@ public class BigArrayImpl implements IBigArray {
 		initDataPageIndex();
 	}
 
+	// removeAll() is not supported in new bigarray. Use deletePartition() instead
 	@Override
 	public void removeAll() throws IOException {
+		throw new IOException("removeAll() is not supported in new bigarray");
+		/*
 		try {
 			arrayWriteLock.lock();
 			this.indexPageFactory.deleteAllPages();
@@ -188,10 +316,11 @@ public class BigArrayImpl implements IBigArray {
 		} finally {
 			arrayWriteLock.unlock();
 		}
+		*/
 	}
 	
 	@Override
-	public void removeBeforeIndex(long index) throws IOException {
+	public void removeBeforeIndex(long index) throws Exception {
 		try {
 			arrayWriteLock.lock();
 			
@@ -222,7 +351,7 @@ public class BigArrayImpl implements IBigArray {
 
 
 	@Override
-	public void removeBefore(long timestamp) throws IOException {
+	public void removeBefore(long timestamp) throws Exception {
 		try {
 			arrayWriteLock.lock();
 			long firstIndexPageIndex = this.indexPageFactory.getFirstPageIndexBefore(timestamp);
@@ -244,8 +373,14 @@ public class BigArrayImpl implements IBigArray {
 	}
 	
 	// find out array head/tail from the meta data
-	void initArrayIndex() throws IOException {
-		IMappedPage metaDataPage = this.metaPageFactory.acquirePage(META_DATA_PAGE_INDEX);
+	void initArrayIndex() throws Exception {
+		
+		// cw IMappedPage metaDataPage = this.metaPageFactory.acquirePage(META_DATA_PAGE_INDEX);
+		// New code
+		// do a acquirePageCreateOrModifyPage() on the last page index for /meta_data/ folder file before User happens to call get(size() - 1) 
+		// page index is different from big array index
+		IMappedPage metaDataPage = this.metaPageFactory.acquirePageCreateOrModifyPage(META_DATA_PAGE_INDEX);
+		// End New code
 		ByteBuffer metaBuf = metaDataPage.getLocal(0);
 		long head = metaBuf.getLong();
 		long tail = metaBuf.getLong();
@@ -255,13 +390,17 @@ public class BigArrayImpl implements IBigArray {
 	}
 	
 	// find out data page head index and offset
-	void initDataPageIndex() throws IOException {
+	void initDataPageIndex() throws Exception {
 
 		if (this.isEmpty()) {
 			headDataPageIndex = 0L;
 			headDataItemOffset = 0;
 		} else {
 			IMappedPage previousIndexPage = null;
+			// New code
+			IMappedPage previousDataPage = null;
+			long previousDataPageIndex = -1;
+			// End New code
 			long previousIndexPageIndex = -1;
 			try {
 				long previousIndex = this.arrayHeadIndex.get() - 1;
@@ -269,27 +408,46 @@ public class BigArrayImpl implements IBigArray {
 					previousIndex = Long.MAX_VALUE; // wrap
 				}
 				previousIndexPageIndex = Calculator.div(previousIndex, INDEX_ITEMS_PER_PAGE_BITS); // shift optimization
-				previousIndexPage = this.indexPageFactory.acquirePage(previousIndexPageIndex);
+				// cw previousIndexPage = this.indexPageFactory.acquirePage(previousIndexPageIndex);
+				// New code
+				// do a acquirePageCreateOrModifyPage() on the last page index for /index/ folder file before User happens to call get(size() - 1) 
+				// page index is different from big array index
+				previousIndexPage = this.indexPageFactory.acquirePageCreateOrModifyPage(previousIndexPageIndex);
+				// End New code
+				
 				int previousIndexPageOffset = (int) (Calculator.mul(Calculator.mod(previousIndex, INDEX_ITEMS_PER_PAGE_BITS), INDEX_ITEM_LENGTH_BITS));
 				ByteBuffer previousIndexItemBuffer = previousIndexPage.getLocal(previousIndexPageOffset);
-				long previousDataPageIndex = previousIndexItemBuffer.getLong();
+				/* cw long*/ previousDataPageIndex = previousIndexItemBuffer.getLong();
 				int previousDataItemOffset = previousIndexItemBuffer.getInt();
 				int perviousDataItemLength = previousIndexItemBuffer.getInt();
 				
 				headDataPageIndex = previousDataPageIndex;
 				headDataItemOffset = previousDataItemOffset + perviousDataItemLength;
+				
+				// New code
+				// do a acquirePageCreateOrModifyPage() on the last page index for /data/ folder file before User happens to call get(size() - 1) 
+				// page index is different from big array index
+				previousDataPage = this.dataPageFactory.acquirePageCreateOrModifyPage(previousDataPageIndex);
+				/// End New code
+				
 			} finally {
 				if (previousIndexPage != null) {
 					this.indexPageFactory.releasePage(previousIndexPageIndex);
 				}
+				// New code
+				if (previousDataPage != null) {
+					this.dataPageFactory.releasePage(previousDataPageIndex);
+				}
+				// End New code
 			}
 		}
 	}
 
 	/**
 	 * Append the data into the head of the array
+	 * @throws Exception 
 	 */
-	public long append(byte[] data) throws IOException {
+	public long append(byte[] data) throws Exception {
 		try {
 			arrayReadLock.lock(); 
 			IMappedPage toAppendDataPage = null;
@@ -322,7 +480,7 @@ public class BigArrayImpl implements IBigArray {
 				toAppendArrayIndex = this.arrayHeadIndex.get();
 				
 				// append data
-				toAppendDataPage = this.dataPageFactory.acquirePage(toAppendDataPageIndex);
+				toAppendDataPage = this.dataPageFactory.acquirePageCreateOrModifyPage(toAppendDataPageIndex);
 				ByteBuffer toAppendDataPageBuffer = toAppendDataPage.getLocal(toAppendDataItemOffset);
 				toAppendDataPageBuffer.put(data);
 				toAppendDataPage.setDirty(true);
@@ -330,7 +488,7 @@ public class BigArrayImpl implements IBigArray {
 				this.headDataItemOffset += data.length;
 				
 				toAppendIndexPageIndex = Calculator.div(toAppendArrayIndex, INDEX_ITEMS_PER_PAGE_BITS); // shift optimization
-				toAppendIndexPage = this.indexPageFactory.acquirePage(toAppendIndexPageIndex);
+				toAppendIndexPage = this.indexPageFactory.acquirePageCreateOrModifyPage(toAppendIndexPageIndex);
 				int toAppendIndexItemOffset = (int) (Calculator.mul(Calculator.mod(toAppendArrayIndex, INDEX_ITEMS_PER_PAGE_BITS), INDEX_ITEM_LENGTH_BITS));
 				
 				// update index
@@ -346,7 +504,7 @@ public class BigArrayImpl implements IBigArray {
 				this.arrayHeadIndex.incrementAndGet();
 				
 				// update meta data
-				IMappedPage metaDataPage = this.metaPageFactory.acquirePage(META_DATA_PAGE_INDEX);
+				IMappedPage metaDataPage = this.metaPageFactory.acquirePageCreateOrModifyPage(META_DATA_PAGE_INDEX);
 				ByteBuffer metaDataBuf = metaDataPage.getLocal(0);
 				metaDataBuf.putLong(this.arrayHeadIndex.get());
 				metaDataBuf.putLong(this.arrayTailIndex.get());
@@ -393,7 +551,7 @@ public class BigArrayImpl implements IBigArray {
 		
 	}
 
-	public byte[] get(long index) throws IOException {
+	public byte[] get(long index) throws Exception {
 		try {
 			arrayReadLock.lock();
 			validateIndex(index);
@@ -418,7 +576,7 @@ public class BigArrayImpl implements IBigArray {
 		}
 	}
 	
-	public long getTimestamp(long index) throws IOException {
+	public long getTimestamp(long index) throws Exception {
 		try {
 			arrayReadLock.lock();
 			validateIndex(index);
@@ -434,7 +592,7 @@ public class BigArrayImpl implements IBigArray {
 		}
 	}
 	
-	ByteBuffer getIndexItemBuffer(long index) throws IOException {
+	ByteBuffer getIndexItemBuffer(long index) throws Exception {
 		
 		IMappedPage indexPage = null;
 		long indexPageIndex = -1L;
@@ -518,8 +676,10 @@ public class BigArrayImpl implements IBigArray {
 		}
 	}
 
-	@Override
-	public void close() throws IOException {
+	//@Override as Closeable interface is not extended/commented for IBigArray interface
+	public void close() throws Exception {
+		flushFilesAll();
+		/* cw 27-Feb-2017, as flushFilesAll() is called above, this code is not needed as flushFilesAll() also does the same thing
 		try {
 			arrayWriteLock.lock();
 			if (this.metaPageFactory != null) {
@@ -534,6 +694,7 @@ public class BigArrayImpl implements IBigArray {
 		} finally {
 			arrayWriteLock.unlock();
 		}
+		*/
 	}
 
 	@Override
@@ -542,7 +703,7 @@ public class BigArrayImpl implements IBigArray {
 	}
 
 	@Override
-	public long findClosestIndex(long timestamp) throws IOException {
+	public long findClosestIndex(long timestamp) throws Exception {
 		try {
 			arrayReadLock.lock();
 			long closestIndex = NOT_FOUND;
@@ -572,7 +733,7 @@ public class BigArrayImpl implements IBigArray {
 		}
 	}
 	
-	private long closestBinarySearch(long low, long high, long timestamp) throws IOException {    		
+	private long closestBinarySearch(long low, long high, long timestamp) throws Exception {    		
         long mid;
         long sum = low + high;
         if (sum < 0) { // overflow
@@ -615,7 +776,7 @@ public class BigArrayImpl implements IBigArray {
 	}
 
 	@Override
-	public void limitBackFileSize(long sizeLimit) throws IOException {
+	public void limitBackFileSize(long sizeLimit) throws Exception {
 		if (sizeLimit < INDEX_PAGE_SIZE + DATA_PAGE_SIZE) {
 			return; // ignore, one index page + one data page are minimum for big array to work correctly
 		}
@@ -665,7 +826,7 @@ public class BigArrayImpl implements IBigArray {
 	}
 
 	@Override
-	public int getItemLength(long index) throws IOException {
+	public int getItemLength(long index) throws Exception {
 		try {
 			arrayReadLock.lock();
 			validateIndex(index);
@@ -677,7 +838,7 @@ public class BigArrayImpl implements IBigArray {
 		}
 	}
 	
-	private int getDataItemLength(long index) throws IOException {
+	private int getDataItemLength(long index) throws Exception {
 		
 		ByteBuffer indexItemBuffer = this.getIndexItemBuffer(index);
 		// position to the data item length
